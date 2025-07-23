@@ -113,6 +113,23 @@ services:
     volumes:
       - ./backend/logs:/app/logs
 
+  # Database Change Consumer Service
+  consumer:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    container_name: consumer
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      - ./consumer/logs:/app/logs
+
   # Frontend Client Service
   frontend:
     build:
@@ -128,6 +145,24 @@ services:
       - backend
     networks:
       - app-network
+    
+  # Massege Consumer:
+
+  consumer:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    container_name: consumer
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      - ./consumer/logs:/app/logs
 
 volumes:
   tidb_data:
