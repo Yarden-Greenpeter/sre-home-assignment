@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  # TiDB Database
+  tidb:
+    image: pingcap/tidb:latest
+    container_name: tidb
+    ports:
+      - "4000:4000"
+      - "10080:10080"
+    environment:
+      - TIDB_HOST=0.0.0.0
+    command: >
+      /tidb-server
+      --store=mocktikv
+      --host=0.0.0.0
+      --advertise-address=tidb
+      --path=/tmp/tidb
+    volumes:
+      - tidb_data:/tmp/tidb
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-P", "4000", "-u", "root", "-e", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Database Initialization
+  db-init:
+    build:
+      context: ./db-init
+      dockerfile: Dockerfile
+    container_name: db-init
+    depends_on:
+      tidb:
+        condition: service_healthy
+    environment:
+      - TIDB_HOST=tidb
+      - TIDB_PORT=4000
+      - TIDB_USER=root
+      - TIDB_PASSWORD=
+      - TIDB_DATABASE=sre_assignment
+    networks:
+      - app-network
+    volumes:
+      - ./db-init:/app
+
+  # Zookeeper (required for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - app-network
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - app-network
+    healthcheck:
+      test: kafka-topics --bootstrap-server kafka:9092 --list
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - TIDB_HOST=tidb
+      - TIDB_PORT=4000
+      - TIDB_USER=root
+      - TIDB_PASSWORD=
+      - TIDB_DATABASE=sre_assignment
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      tidb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+    volumes:
+      - ./backend/logs:/app/logs
+
+  # Frontend Client Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3001:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:3000
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+volumes:
+  tidb_data:
+
+networks:
+  app-network:
+    driver: bridge
